@@ -1,1 +1,3 @@
-# 自動化雀雀 DC機器人
+# FBDCBot
+
+A discord bot for crawling facebook
