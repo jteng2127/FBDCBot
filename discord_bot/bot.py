@@ -251,4 +251,14 @@ def run(token):
             await asyncio.sleep(1)
         await interation.followup.send(f'Finished fetching posts. Found {len(posts)} posts.')
 
+    @client.tree.command(name="clear_bot_messages")
+    @app_commands.describe(limit='Limit of messages to search')
+    async def clear_bot_messages(interation: discord.Interaction, limit: int = 200):
+        await interation.response.defer()
+        await interation.followup.send('Clearing bot messages...')
+        async for message in interation.channel.history(limit=limit):
+            if message.author == client.user:
+                await message.delete()
+        await interation.followup.send('Finished clearing bot messages.')
+
     client.run(token)
