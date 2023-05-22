@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 import asyncio
 import datetime
 from crawler.FBGroupCrawler import FBGroupCrawler
@@ -62,20 +63,76 @@ ROOMING_HOUSE_KEYWORDS = ['雅房']
 OUTSIDE_FACING_WINDOWS_KEYWORDS = ['外窗']
 
 
-def filter_posts(posts):
+def filter_posts(
+    posts,
+    is_kitchen_required=False,
+    is_studio_required=False,
+    is_rooming_house_required=False,
+    is_outside_facing_windows_required=False,
+    end_date=None,
+):
     filtered_posts = posts[~posts['CONTENT'].str.contains(
         '|'.join(IGNORE_KEYWORDS),
         regex=True,
         case=False
     )]
+    if is_kitchen_required:
+        filtered_posts = filtered_posts[filtered_posts['CONTENT'].str.contains(
+            '|'.join(KITCHEN_KEYWORDS),
+            regex=True,
+            case=False
+        )]
+    if is_studio_required:
+        filtered_posts = filtered_posts[filtered_posts['CONTENT'].str.contains(
+            '|'.join(STUDIO_KEYWORDS),
+            regex=True,
+            case=False
+        )]
+    if is_rooming_house_required:
+        filtered_posts = filtered_posts[filtered_posts['CONTENT'].str.contains(
+            '|'.join(ROOMING_HOUSE_KEYWORDS),
+            regex=True,
+            case=False
+        )]
+    if is_outside_facing_windows_required:
+        filtered_posts = filtered_posts[filtered_posts['CONTENT'].str.contains(
+            '|'.join(OUTSIDE_FACING_WINDOWS_KEYWORDS),
+            regex=True,
+            case=False
+        )]
+    if end_date is not None:
+        filtered_posts = filtered_posts[filtered_posts['TIME'] <= end_date]
     # filter empty posts
     filtered_posts = filtered_posts[filtered_posts['CONTENT'].str.len() > 0]
     return filtered_posts
 
 
+def format_post_message(post, group_id, group_name):
+    message_text = '=' * 20 + '\n'
+    message_text += f'**URL**: https://www.facebook.com/groups/{group_id}/permalink/{post["POSTID"]}\n'
+    message_text += f'**GROUP**: {group_name}\n'
+    message_text += f'**TIME**: {post["TIME"]}\n'
+    message_text += f'**AUTHOR**: {post["NAME"]} ({post["ACTORID"]})\n'
+    # message_text += f'**COMMENT/LIKE/SHARE**: {post["COMMENTCOUNT"]}/{post["LIKECOUNT"]}/{post["SHARECOUNT"]}\n'
+    if post['CONTENT'] != '':
+        message_text += f'**CONTENT**: \n{post["CONTENT"]}\n'
+    return message_text
+
+
+async def add_reaction_by_keywords(message, content, keywords, reaction):
+    if any(keyword in content for keyword in keywords):
+        await message.add_reaction(reaction)
+
+async def add_reactions(message, content):
+    await add_reaction_by_keywords(message, content, KITCHEN_KEYWORDS, '🔥')
+    await add_reaction_by_keywords(message, content, STUDIO_KEYWORDS, '🛁')
+    await add_reaction_by_keywords(message, content, ROOMING_HOUSE_KEYWORDS, '🛏️')
+    await add_reaction_by_keywords(message, content, OUTSIDE_FACING_WINDOWS_KEYWORDS, '🌞')
+
 class MyClient(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self) -> None:
         # create the background task and run it in the background
@@ -83,6 +140,8 @@ class MyClient(discord.Client):
 
     async def on_ready(self):
         print(f'Logged in as {self.user} (ID: {self.user.id})')
+        synced = await self.tree.sync()
+        print(f'Synced {len(synced)} commands')
         print('------')
 
 
@@ -129,30 +188,67 @@ class MyClient(discord.Client):
 
                 if len(posts) > 0:
                     for idx, post in posts.iterrows():
-                        message_text = '=' * 20 + '\n'
-                        message_text += f'**URL**: https://www.facebook.com/groups/{group_id}/permalink/{post["POSTID"]}\n'
-                        message_text += f'**GROUP**: {group_name}\n'
-                        message_text += f'**TIME**: {post["TIME"]}\n'
-                        message_text += f'**AUTHOR**: {post["NAME"]} ({post["ACTORID"]})\n'
-                        # message_text += f'**COMMENT/LIKE/SHARE**: {post["COMMENTCOUNT"]}/{post["LIKECOUNT"]}/{post["SHARECOUNT"]}\n'
-                        if post['CONTENT'] != '':
-                            message_text += f'**CONTENT**: \n{post["CONTENT"]}\n'
+                        message_text = format_post_message(post, group_id, group_name)
                         message = await rent_channel.send(message_text)
-
-                        if any(keyword in post['CONTENT'] for keyword in KITCHEN_KEYWORDS):
-                            await message.add_reaction('🔥')
-                        if any(keyword in post['CONTENT'] for keyword in STUDIO_KEYWORDS):
-                            await message.add_reaction('🛁')
-                        if any(keyword in post['CONTENT'] for keyword in ROOMING_HOUSE_KEYWORDS):
-                            await message.add_reaction('🛏️')
-                        if any(keyword in post['CONTENT'] for keyword in OUTSIDE_FACING_WINDOWS_KEYWORDS):
-                            await message.add_reaction('🌞')
+                        await add_reactions(message, post['CONTENT'])
                 print(f'Finished fetching group: {group_name}({group_id})...')
                 await asyncio.sleep(10)
             
             print('====== Finished fetching latest posts.')
-            await asyncio.sleep(600)
-
+            await asyncio.sleep(900)
+    
 def run(token):
-    client = MyClient(intents=discord.Intents.default())
+    client = MyClient(intents=discord.Intents.default(), command_prefix='!')
+
+    @client.tree.command(name='test')
+    async def test(interation: discord.Interaction):
+        await interation.response.send_message('test')
+    
+    @client.tree.command(name='show_all_groups')
+    async def show_all_groups(interation: discord.Interaction):
+        await interation.response.defer()
+        message_text = ""
+        for group_id, group_name in FB_GROUP_IDS.items():
+            message_text += f'{group_name}({group_id})\n'
+        await interation.followup.send(message_text)
+
+    @client.tree.command(name='fetch_posts')
+    @app_commands.describe(
+        start_date='Start date to fetch posts (YYYY-MM-DD)',
+        end_date='End date to fetch posts (YYYY-MM-DD)',
+        group_id='Group id to fetch posts from',
+        is_kitchen_required='filter kitchen(🔥) posts',
+        is_studio_required='filter studio(🛁) posts',
+        is_windows_required='filter outside facing windows(🌞) posts',
+    )
+    async def fetch_posts(
+        interation: discord.Interaction,
+        group_id: str,
+        start_date: str,
+        end_date: str = None,
+        is_kitchen_required: bool = False,
+        is_studio_required: bool = False,
+        is_windows_required: bool = False,
+    ):
+        await interation.response.defer()
+        group_name = FB_GROUP_IDS[group_id]
+        await interation.followup.send(
+            f'Fetching posts from {group_name}({group_id}) between {start_date} and {end_date}...'
+        )
+        crawler = FBGroupCrawler(group_id)
+        posts = await client.run_blocking(crawler.crawl_posts_after_date, start_date)
+        posts = filter_posts(
+            posts,
+            is_kitchen_required=is_kitchen_required,
+            is_studio_required=is_studio_required,
+            is_outside_facing_windows_required=is_windows_required,
+            end_date=end_date,
+        )
+        for idx, post in posts.iterrows():
+            message_text = format_post_message(post, group_id, group_name)
+            message = await interation.followup.send(message_text)
+            await add_reactions(message, post['CONTENT'])
+            await asyncio.sleep(1)
+        await interation.followup.send(f'Finished fetching posts. Found {len(posts)} posts.')
+
     client.run(token)
